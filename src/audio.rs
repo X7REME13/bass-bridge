@@ -1,7 +1,7 @@
 use crate::dsp::{Resampler, SubwooferDsp};
 use crate::settings::Settings;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{SampleFormat, Stream, StreamConfig};
+use cpal::{SampleFormat, Stream};
 use crossbeam_channel::{bounded, Receiver, Sender};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -123,6 +123,12 @@ impl AudioEngine {
 
         let in_rate = in_config.sample_rate().0;
         let out_rate = out_config.sample_rate().0;
+        let in_channels = in_config.channels() as usize;
+        let out_channels = out_config.channels() as usize;
+        let in_format = in_config.sample_format();
+        let out_format = out_config.sample_format();
+        let stream_config_in = in_config.config();
+        let stream_config_out = out_config.config();
 
         // Initialize DSP matching the hardware output sample rate
         *self.dsp.lock().unwrap() = SubwooferDsp::new(
@@ -143,17 +149,15 @@ impl AudioEngine {
         *in_error.lock().unwrap() = None;
 
         // 3. Build Loopback Input Stream on the capture device
-        let capture_stream = match in_config.sample_format() {
+        let capture_stream = match in_format {
             SampleFormat::F32 => {
-                let channels = in_config.channels() as usize;
-                let stream_config: StreamConfig = in_config.into();
                 input_device.build_input_stream(
-                    &stream_config,
+                    &stream_config_in,
                     move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                        let mut viz_samples = Vec::with_capacity(data.len() / channels);
-                        for frame in data.chunks_exact(channels) {
+                        let mut viz_samples = Vec::with_capacity(data.len() / in_channels);
+                        for frame in data.chunks_exact(in_channels) {
                             let l = frame[0];
-                            let r = if channels > 1 { frame[1] } else { frame[0] };
+                            let r = if in_channels > 1 { frame[1] } else { frame[0] };
                             let _ = tx.try_send([l, r]);
                             viz_samples.push((l + r) * 0.5);
                         }
@@ -166,15 +170,13 @@ impl AudioEngine {
                 )
             }
             SampleFormat::I16 => {
-                let channels = in_config.channels() as usize;
-                let stream_config: StreamConfig = in_config.into();
                 input_device.build_input_stream(
-                    &stream_config,
+                    &stream_config_in,
                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                        let mut viz_samples = Vec::with_capacity(data.len() / channels);
-                        for frame in data.chunks_exact(channels) {
+                        let mut viz_samples = Vec::with_capacity(data.len() / in_channels);
+                        for frame in data.chunks_exact(in_channels) {
                             let l = frame[0] as f32 / 32768.0;
-                            let r = if channels > 1 { frame[1] as f32 / 32768.0 } else { l };
+                            let r = if in_channels > 1 { frame[1] as f32 / 32768.0 } else { l };
                             let _ = tx.try_send([l, r]);
                             viz_samples.push((l + r) * 0.5);
                         }
@@ -199,10 +201,7 @@ impl AudioEngine {
         let mut resampler = Resampler::new(in_rate, out_rate);
         let mut resampled_buf = Vec::with_capacity(4096);
 
-        let out_channels = out_config.channels() as usize;
-        let stream_config_out: StreamConfig = out_config.into();
-
-        let playback_stream = match out_config.sample_format() {
+        let playback_stream = match out_format {
             SampleFormat::F32 => output_device.build_output_stream(
                 &stream_config_out,
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {

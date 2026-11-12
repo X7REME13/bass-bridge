@@ -19,6 +19,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "BassBridge",
         native_options,
-        Box::new(|cc| Ok(Box::new(BassBridgeApp::new(cc)))),
+        Box::new(|cc| Box::new(BassBridgeApp::new(cc))),
     )
 }
