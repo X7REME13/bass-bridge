@@ -1,6 +1,6 @@
 use crate::audio::AudioEngine;
 use crate::settings::Settings;
-use eframe::egui::{self, Color32, Pos2, Stroke, StrokeKind, Vec2};
+use eframe::egui::{self, Color32, Pos2, Stroke, Vec2};
 
 pub struct BassBridgeApp {
     settings: Settings,
@@ -259,7 +259,7 @@ impl eframe::App for BassBridgeApp {
 
                 // Phase Inversion & Bypass
                 ui.horizontal(|ui| {
-                    let mut phase_inv = self.settings.phase_inverted;
+                    let phase_inv = self.settings.phase_inverted;
                     let phase_label = if phase_inv { "Phase: 180° (Inverted)" } else { "Phase: 0° (Normal)" };
                     if ui.selectable_label(phase_inv, phase_label).on_hover_text("Inverts audio polarity by 180° to eliminate acoustic cancellation between subwoofer and main speakers").clicked() {
                         self.settings.phase_inverted = !phase_inv;
@@ -267,7 +267,7 @@ impl eframe::App for BassBridgeApp {
                         self.settings.save();
                     }
 
-                    let mut bypass = self.settings.bypass;
+                    let bypass = self.settings.bypass;
                     let bypass_label = if bypass { "DSP Bypassed (Full Range)" } else { "DSP Active (LR4 Filter)" };
                     if ui.selectable_label(bypass, bypass_label).on_hover_text("Bypasses low-pass filtering for A/B testing and direct comparison").clicked() {
                         self.settings.bypass = !bypass;
@@ -287,13 +287,13 @@ fn render_waveform_visualizer(ui: &mut egui::Ui, audio: &AudioEngine) {
 
     // Dark oscilloscope background
     painter.rect_filled(rect, 4.0, Color32::from_rgb(18, 20, 24));
-    painter.rect_stroke(rect, 4.0, Stroke::new(1.0, Color32::from_rgb(45, 50, 60)), StrokeKind::Inside);
+    painter.rect_stroke(rect, 4.0, Stroke::new(1.0_f32, Color32::from_rgb(45, 50, 60)));
 
     // Grid center line
     let mid_y = rect.center().y;
     painter.line_segment(
         [Pos2::new(rect.left(), mid_y), Pos2::new(rect.right(), mid_y)],
-        Stroke::new(0.5, Color32::from_rgb(35, 40, 50)),
+        Stroke::new(0.5_f32, Color32::from_rgb(35, 40, 50)),
     );
 
     let in_samples = audio.tap.input_wave.lock().unwrap().clone();
@@ -318,7 +318,7 @@ fn render_waveform_visualizer(ui: &mut egui::Ui, audio: &AudioEngine) {
     if in_points.len() >= 2 {
         painter.add(egui::Shape::line(
             in_points,
-            Stroke::new(1.0, Color32::from_rgba_unmultiplied(80, 200, 255, 120)),
+            Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(80, 200, 255, 120)),
         ));
     }
 
@@ -337,7 +337,7 @@ fn render_waveform_visualizer(ui: &mut egui::Ui, audio: &AudioEngine) {
     if bass_points.len() >= 2 {
         painter.add(egui::Shape::line(
             bass_points,
-            Stroke::new(2.2, Color32::from_rgb(255, 140, 30)),
+            Stroke::new(2.2_f32, Color32::from_rgb(255, 140, 30)),
         ));
     }
 
