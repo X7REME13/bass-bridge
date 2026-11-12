@@ -1,0 +1,7 @@
+/target
+**/*.rs.bk
+*.json
+!bass_bridge_config.json
+.DS_Store
+*.exe
+*.pdb
