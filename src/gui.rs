@@ -1,6 +1,6 @@
 use crate::audio::AudioEngine;
 use crate::settings::Settings;
-use eframe::egui::{self, Color32, Pos2, Stroke, Vec2};
+use eframe::egui::{self, Color32, Pos2, Stroke, StrokeKind, Vec2};
 
 pub struct BassBridgeApp {
     settings: Settings,
@@ -287,7 +287,7 @@ fn render_waveform_visualizer(ui: &mut egui::Ui, audio: &AudioEngine) {
 
     // Dark oscilloscope background
     painter.rect_filled(rect, 4.0, Color32::from_rgb(18, 20, 24));
-    painter.rect_stroke(rect, 4.0, Stroke::new(1.0, Color32::from_rgb(45, 50, 60)));
+    painter.rect_stroke(rect, 4.0, Stroke::new(1.0, Color32::from_rgb(45, 50, 60)), StrokeKind::Inside);
 
     // Grid center line
     let mid_y = rect.center().y;

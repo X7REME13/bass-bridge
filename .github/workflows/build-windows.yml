@@ -22,11 +22,43 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Run Tests
-        run: cargo test --verbose
+      - name: Build and Test
+        shell: pwsh
+        run: |
+          $summary = "## 🛠️ Build Diagnostics`n`n"
+          
+          Write-Host ">>> Running cargo check..."
+          $checkOut = cargo check --verbose 2>&1
+          $checkCode = $LASTEXITCODE
+          $checkOut | ForEach-Object { Write-Host $_ }
+          if ($checkCode -ne 0) {
+            $summary += "### ❌ cargo check failed`n````text`n" + ($checkOut -join "`n") + "`n`````n"
+            $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+            exit 1
+          }
 
-      - name: Build Release Binary
-        run: cargo build --release --verbose
+          Write-Host ">>> Running cargo test..."
+          $testOut = cargo test --verbose 2>&1
+          $testCode = $LASTEXITCODE
+          $testOut | ForEach-Object { Write-Host $_ }
+          if ($testCode -ne 0) {
+            $summary += "### ❌ cargo test failed`n````text`n" + ($testOut -join "`n") + "`n`````n"
+            $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+            exit 1
+          }
+
+          Write-Host ">>> Running cargo build --release..."
+          $buildOut = cargo build --release --verbose 2>&1
+          $buildCode = $LASTEXITCODE
+          $buildOut | ForEach-Object { Write-Host $_ }
+          if ($buildCode -ne 0) {
+            $summary += "### ❌ cargo build --release failed`n````text`n" + ($buildOut -join "`n") + "`n`````n"
+            $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+            exit 1
+          }
+
+          $summary += "### ✅ All checks, tests, and release builds succeeded!`n"
+          $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
 
       - name: Upload Windows Executable Artifact
         uses: actions/upload-artifact@v4
