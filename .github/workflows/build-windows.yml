@@ -26,27 +26,16 @@ jobs:
         shell: pwsh
         run: |
           Write-Host ">>> Running cargo check..."
-          cargo check --verbose 2>&1 | Tee-Object -FilePath "check.log"
+          cargo check --verbose
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
           Write-Host ">>> Running cargo test..."
-          cargo test --verbose 2>&1 | Tee-Object -FilePath "test.log"
+          cargo test --verbose
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
           Write-Host ">>> Running cargo build --release..."
-          cargo build --release --verbose 2>&1 | Tee-Object -FilePath "build.log"
+          cargo build --release --verbose
           if ($LASTEXITCODE -ne 0) { exit 1 }
-
-      - name: Push Build Log to ci-log branch
-        if: always()
-        shell: pwsh
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git checkout -B ci-log
-          git add -f *.log
-          git commit -m "CI build logs"
-          git push origin ci-log -f
 
       - name: Upload Windows Executable Artifact
         uses: actions/upload-artifact@v4
