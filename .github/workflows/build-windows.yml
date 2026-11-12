@@ -25,40 +25,28 @@ jobs:
       - name: Build and Test
         shell: pwsh
         run: |
-          $summary = "## 🛠️ Build Diagnostics`n`n"
-          
           Write-Host ">>> Running cargo check..."
-          $checkOut = cargo check --verbose 2>&1
-          $checkCode = $LASTEXITCODE
-          $checkOut | ForEach-Object { Write-Host $_ }
-          if ($checkCode -ne 0) {
-            $summary += "### ❌ cargo check failed`n````text`n" + ($checkOut -join "`n") + "`n`````n"
-            $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
-            exit 1
-          }
+          cargo check --verbose 2>&1 | Tee-Object -FilePath "check.log"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
           Write-Host ">>> Running cargo test..."
-          $testOut = cargo test --verbose 2>&1
-          $testCode = $LASTEXITCODE
-          $testOut | ForEach-Object { Write-Host $_ }
-          if ($testCode -ne 0) {
-            $summary += "### ❌ cargo test failed`n````text`n" + ($testOut -join "`n") + "`n`````n"
-            $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
-            exit 1
-          }
+          cargo test --verbose 2>&1 | Tee-Object -FilePath "test.log"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
           Write-Host ">>> Running cargo build --release..."
-          $buildOut = cargo build --release --verbose 2>&1
-          $buildCode = $LASTEXITCODE
-          $buildOut | ForEach-Object { Write-Host $_ }
-          if ($buildCode -ne 0) {
-            $summary += "### ❌ cargo build --release failed`n````text`n" + ($buildOut -join "`n") + "`n`````n"
-            $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
-            exit 1
-          }
+          cargo build --release --verbose 2>&1 | Tee-Object -FilePath "build.log"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
-          $summary += "### ✅ All checks, tests, and release builds succeeded!`n"
-          $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+      - name: Push Build Log to ci-log branch
+        if: always()
+        shell: pwsh
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git checkout -B ci-log
+          git add -f *.log
+          git commit -m "CI build logs"
+          git push origin ci-log -f
 
       - name: Upload Windows Executable Artifact
         uses: actions/upload-artifact@v4
