@@ -1,6 +1,6 @@
 [package]
 name = "bass-bridge"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["X7REME13"]
 description = "System-wide Windows audio loopback capture and low-pass filter routing for subwoofers and chair tactile transducers"

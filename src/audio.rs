@@ -6,11 +6,13 @@ use crossbeam_channel::{bounded, Receiver, Sender};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-/// Snapshot buffer for real-time oscilloscope display.
+/// Snapshot buffer for real-time oscilloscope display and hardware VU meters.
 #[derive(Clone, Default)]
 pub struct VisualizerTap {
     pub input_wave: Arc<Mutex<Vec<f32>>>,
     pub bass_wave: Arc<Mutex<Vec<f32>>>,
+    pub peak_in: Arc<Mutex<f32>>,
+    pub peak_out: Arc<Mutex<f32>>,
 }
 
 impl VisualizerTap {
@@ -18,10 +20,24 @@ impl VisualizerTap {
         Self {
             input_wave: Arc::new(Mutex::new(vec![0.0; 256])),
             bass_wave: Arc::new(Mutex::new(vec![0.0; 256])),
+            peak_in: Arc::new(Mutex::new(0.0)),
+            peak_out: Arc::new(Mutex::new(0.0)),
         }
     }
 
     pub fn push_input(&self, samples: &[f32]) {
+        let mut max_abs = 0.0f32;
+        for &s in samples {
+            let a = s.abs();
+            if a > max_abs {
+                max_abs = a;
+            }
+        }
+
+        if let Ok(mut p) = self.peak_in.try_lock() {
+            *p = max_abs.max(*p * 0.88);
+        }
+
         if let Ok(mut buf) = self.input_wave.try_lock() {
             let n = samples.len().min(buf.len());
             buf.drain(0..n);
@@ -30,11 +46,29 @@ impl VisualizerTap {
     }
 
     pub fn push_bass(&self, samples: &[f32]) {
+        let mut max_abs = 0.0f32;
+        for &s in samples {
+            let a = s.abs();
+            if a > max_abs {
+                max_abs = a;
+            }
+        }
+
+        if let Ok(mut p) = self.peak_out.try_lock() {
+            *p = max_abs.max(*p * 0.88);
+        }
+
         if let Ok(mut buf) = self.bass_wave.try_lock() {
             let n = samples.len().min(buf.len());
             buf.drain(0..n);
             buf.extend_from_slice(&samples[samples.len() - n..]);
         }
+    }
+
+    pub fn get_peaks(&self) -> (f32, f32) {
+        let p_in = self.peak_in.lock().map(|p| *p).unwrap_or(0.0);
+        let p_out = self.peak_out.lock().map(|p| *p).unwrap_or(0.0);
+        (p_in, p_out)
     }
 }
 
@@ -54,7 +88,7 @@ impl AudioEngine {
             _capture_stream: None,
             _playback_stream: None,
             running: Arc::new(AtomicBool::new(false)),
-            dsp: Arc::new(Mutex::new(SubwooferDsp::new(80.0, 0.0, 0.0, false, false, false, 48000))),
+            dsp: Arc::new(Mutex::new(SubwooferDsp::new(90.0, 6.0, 0.0, false, false, false, true, true, 48000))),
             tap: VisualizerTap::new(),
             input_error: Arc::new(Mutex::new(None)),
             output_error: Arc::new(Mutex::new(None)),
@@ -138,6 +172,8 @@ impl AudioEngine {
             settings.stereo,
             settings.phase_inverted,
             settings.bypass,
+            settings.soft_clip,
+            settings.direct_sum,
             out_rate,
         );
 

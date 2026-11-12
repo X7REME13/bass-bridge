@@ -10,9 +10,9 @@ use gui::BassBridgeApp;
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("BassBridge - Subwoofer & Transducer Router")
-            .with_inner_size([540.0, 720.0])
-            .with_min_inner_size([460.0, 560.0]),
+            .with_title("BassBridge Pro - Subwoofer & Transducer Crossover")
+            .with_inner_size([560.0, 760.0])
+            .with_min_inner_size([480.0, 620.0]),
         ..Default::default()
     };
 

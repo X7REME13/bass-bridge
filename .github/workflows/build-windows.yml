@@ -58,22 +58,27 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main'
         with:
-          tag_name: v0.1.0
-          name: "BassBridge v0.1.0 (Early Access Preview)"
+          tag_name: v0.2.0
+          name: "BassBridge Pro v0.2.0 (Studio Overhaul & Boost)"
           body: |
-            ## 🔊 BassBridge v0.1.0 Windows Executable
-            
-            Ready to test on Windows 10/11!
-            
-            ### What's included:
-            - **WASAPI Loopback Capture:** Routes system-wide audio in real-time.
-            - **Linkwitz-Riley 4th-Order (LR4) Low-Pass Filter:** Steep 24 dB/octave attenuation.
-            - **Stereo vs. Dual-Mono Routing:** Switch between dual chair tactile transducers and single subwoofers.
-            - **Sample-Accurate Delay Compensation:** 0 to 500 ms delay line.
-            - **Phase Inversion:** 0° or 180° polarity flip.
-            - **Real-Time 60 FPS Oscilloscope:** Dual-trace visualizer for input vs bass.
-            
-            Download `bass-bridge.exe` below, launch it, select your audio devices, and click **Start Bass Routing**.
+            ## 🔊 BassBridge Pro v0.2.0 Windows Release
+
+            Major update addressing audio power and interface aesthetics!
+
+            ### ✨ What's New in v0.2.0:
+            - **Massive Volume & Punch Boost:**
+              - Default gain increased to **+6.0 dB** (with range up to **+36 dB**).
+              - **Direct Summing Switch (+6 dB Voltage Boost):** Delivers double voltage directly into tactile transducers and subwoofers instead of standard 0.5x downmixing attenuation.
+              - **Analog Tape Soft-Saturator / Limiter:** Smooth $\tanh(x)$ soft saturation prevents harsh DAC digital clipping when driving subwoofers and transducers hard.
+            - **Cyber-Studio Dark UI Redesign:**
+              - Custom dark metallic obsidian theme (`#0B0E12`) with neon studio cyan, mint, and amber accents.
+              - **Interactive Frequency Response Bode Plot (20 Hz - 1000 Hz):** Live logarithmic frequency response curve visualizing the Linkwitz-Riley 4th-order (-24 dB/oct) slope with live crossover cutoff markers and energy glow.
+              - **Dual Real-time Oscilloscope:** Dual-trace waveform monitor with CRT dark grid.
+              - **Dual Hardware-Style LED Peak Meters:** Live dBFS level monitoring with clip warning.
+              - **Quick Crossover Presets:** Instant 40 Hz Sub, 80 Hz THX, 120 Hz Shakers, and 160 Hz Punch buttons.
+              - **Acoustic Distance Readout:** Shows physical wave travel distance equivalent in meters and feet for delay compensation.
+
+            Download `bass-bridge.exe` below, launch it, choose your devices, and start bass routing!
           files: target/release/bass-bridge.exe
           prerelease: false
           generate_release_notes: false

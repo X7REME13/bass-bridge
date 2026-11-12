@@ -88,6 +88,8 @@ pub struct SubwooferDsp {
     pub stereo: bool,
     pub phase_inverted: bool,
     pub bypass: bool,
+    pub soft_clip: bool,
+    pub direct_sum: bool,
     pub delay_samples: usize,
     pub delay_buffer_l: Vec<f32>,
     pub delay_buffer_r: Vec<f32>,
@@ -106,6 +108,8 @@ impl SubwooferDsp {
         stereo: bool,
         phase_inverted: bool,
         bypass: bool,
+        soft_clip: bool,
+        direct_sum: bool,
         sample_rate: u32,
     ) -> Self {
         let sample_rate_f = f64::from(sample_rate.max(1));
@@ -126,7 +130,7 @@ impl SubwooferDsp {
         } else {
             Vec::new()
         };
-        let gain_db = gain_db.clamp(-30.0, 30.0);
+        let gain_db = gain_db.clamp(-30.0, 36.0);
         let gain_linear = 10.0f32.powf(gain_db / 20.0);
         Self {
             sample_rate: sample_rate_f,
@@ -136,6 +140,8 @@ impl SubwooferDsp {
             stereo,
             phase_inverted,
             bypass,
+            soft_clip,
+            direct_sum,
             delay_samples,
             delay_buffer_l,
             delay_buffer_r,
@@ -188,7 +194,7 @@ impl SubwooferDsp {
     }
 
     pub fn set_gain_db(&mut self, gain_db: f32) {
-        self.gain_db = gain_db.clamp(-30.0, 30.0);
+        self.gain_db = gain_db.clamp(-30.0, 36.0);
         self.gain_linear = 10.0f32.powf(self.gain_db / 20.0);
     }
 
@@ -225,16 +231,34 @@ impl SubwooferDsp {
         self.bypass = bypass;
     }
 
+    pub fn set_soft_clip(&mut self, soft_clip: bool) {
+        self.soft_clip = soft_clip;
+    }
+
+    pub fn set_direct_sum(&mut self, direct_sum: bool) {
+        self.direct_sum = direct_sum;
+    }
+
+    /// Evaluates the total magnitude response of the LR4 filter at `hz`.
+    pub fn lr4_gain_db_at(&self, hz: f64) -> f64 {
+        if self.bypass {
+            self.gain_db as f64
+        } else {
+            self.stage1_l.gain_db_at(hz) + self.stage2_l.gain_db_at(hz) + self.gain_db as f64
+        }
+    }
+
     /// Process interleaved stereo audio samples in-place.
     pub fn process(&mut self, samples: &mut [f32]) {
         let has_delay = !self.delay_buffer_l.is_empty();
         let phase_mult = if self.phase_inverted { -1.0f32 } else { 1.0f32 };
+        let sum_mult = if self.direct_sum { 1.0f32 } else { 0.5f32 };
 
         for frame in samples.chunks_exact_mut(2) {
             let (raw_l, raw_r) = if self.stereo {
                 (frame[0] * self.gain_linear, frame[1] * self.gain_linear)
             } else {
-                let mono = (frame[0] + frame[1]) * 0.5 * self.gain_linear;
+                let mono = (frame[0] + frame[1]) * sum_mult * self.gain_linear;
                 (mono, mono)
             };
 
@@ -262,13 +286,31 @@ impl SubwooferDsp {
                 (filtered_l, filtered_r)
             };
 
-            frame[0] = out_l * phase_mult;
-            frame[1] = out_r * phase_mult;
+            let mut final_l = out_l * phase_mult;
+            let mut final_r = out_r * phase_mult;
+
+            if self.soft_clip {
+                final_l = soft_saturate(final_l);
+                final_r = soft_saturate(final_r);
+            }
+
+            frame[0] = final_l;
+            frame[1] = final_r;
 
             if has_delay {
                 self.delay_write_pos = (self.delay_write_pos + 1) % self.delay_samples;
             }
         }
+    }
+}
+
+/// Analog-modeled hyperbolic tangent soft saturation to prevent harsh digital clipping.
+#[inline]
+pub fn soft_saturate(x: f32) -> f32 {
+    if x.abs() < 0.65 {
+        x
+    } else {
+        x.tanh()
     }
 }
 
@@ -326,21 +368,17 @@ mod tests {
 
     #[test]
     fn biquad_butterworth_lowpass_response() {
-        // 2nd-order Butterworth low-pass at 80 Hz, sample rate 44100 Hz
         let lpf = Biquad::lowpass(80.0, std::f64::consts::FRAC_1_SQRT_2, 44100.0);
 
-        // At 20 Hz (passband): close to 0 dB
         let gain_20 = lpf.gain_db_at(20.0);
         assert!(gain_20.abs() < 0.1, "Passband at 20 Hz should be ~0 dB, got {gain_20}");
 
-        // At cutoff (80 Hz): exactly -3.01 dB for 2nd-order Butterworth
         let gain_80 = lpf.gain_db_at(80.0);
         assert!(
             (gain_80 - (-3.01)).abs() < 0.1,
             "Cutoff at 80 Hz should be ~ -3.01 dB, got {gain_80}"
         );
 
-        // 1 octave above cutoff (160 Hz): ~ -12.3 dB (12 dB/octave slope)
         let gain_160 = lpf.gain_db_at(160.0);
         assert!(
             (gain_160 - (-12.3)).abs() < 0.5,
@@ -350,8 +388,7 @@ mod tests {
 
     #[test]
     fn subwoofer_dsp_lr4_crossover_response() {
-        // Linkwitz-Riley 4th order: 2 cascaded 2nd-order Butterworth filters
-        let dsp = SubwooferDsp::new(80.0, 0.0, 0.0, false, false, false, 44100);
+        let dsp = SubwooferDsp::new(80.0, 0.0, 0.0, false, false, false, false, false, 44100);
 
         let gain_20 = dsp.stage1_l.gain_db_at(20.0) + dsp.stage2_l.gain_db_at(20.0);
         assert!(gain_20.abs() < 0.2, "20 Hz sub-bass should be ~0 dB, got {gain_20}");
@@ -371,10 +408,9 @@ mod tests {
 
     #[test]
     fn subwoofer_dsp_mono_downmix() {
-        let mut dsp = SubwooferDsp::new(80.0, 0.0, 0.0, false, false, false, 44100);
+        let mut dsp = SubwooferDsp::new(80.0, 0.0, 0.0, false, false, false, false, false, 44100);
         let mut samples = vec![1.0, 0.0, 1.0, 0.0, 1.0, 0.0];
         dsp.process(&mut samples);
-        // Both channels should be identical in dual-mono mode
         assert_eq!(samples[0], samples[1]);
         assert_eq!(samples[2], samples[3]);
         assert_eq!(samples[4], samples[5]);
@@ -382,17 +418,16 @@ mod tests {
 
     #[test]
     fn subwoofer_dsp_stereo_separation() {
-        let mut dsp = SubwooferDsp::new(80.0, 0.0, 0.0, true, false, false, 44100);
+        let mut dsp = SubwooferDsp::new(80.0, 0.0, 0.0, true, false, false, false, false, 44100);
         let mut samples = vec![1.0, 0.0, 1.0, 0.0];
         dsp.process(&mut samples);
-        // Left has signal, right should be silent
         assert!(samples[0] > 0.0);
         assert_eq!(samples[1], 0.0);
     }
 
     #[test]
     fn subwoofer_dsp_delay_line() {
-        let mut dsp = SubwooferDsp::new(80.0, 0.0, 1.0, false, false, false, 44100);
+        let mut dsp = SubwooferDsp::new(80.0, 0.0, 1.0, false, false, false, false, false, 44100);
         assert_eq!(dsp.delay_samples, 44);
 
         let mut block = vec![0.0f32; 88];
@@ -402,8 +437,8 @@ mod tests {
 
     #[test]
     fn subwoofer_dsp_phase_inversion() {
-        let mut dsp_norm = SubwooferDsp::new(80.0, 0.0, 0.0, true, false, false, 44100);
-        let mut dsp_inv = SubwooferDsp::new(80.0, 0.0, 0.0, true, true, false, 44100);
+        let mut dsp_norm = SubwooferDsp::new(80.0, 0.0, 0.0, true, false, false, false, false, 44100);
+        let mut dsp_inv = SubwooferDsp::new(80.0, 0.0, 0.0, true, true, false, false, false, 44100);
 
         let mut s_norm = vec![0.5, -0.5, 0.8, -0.2];
         let mut s_inv = s_norm.clone();
@@ -418,13 +453,22 @@ mod tests {
 
     #[test]
     fn subwoofer_dsp_bypass() {
-        let mut dsp = SubwooferDsp::new(80.0, 0.0, 0.0, true, false, true, 44100);
+        let mut dsp = SubwooferDsp::new(80.0, 0.0, 0.0, true, false, true, false, false, 44100);
         let original = vec![0.5, -0.25, 0.8, -0.1];
         let mut samples = original.clone();
         dsp.process(&mut samples);
         for (a, b) in original.iter().zip(samples.iter()) {
             assert!((a - b).abs() < 1e-6, "Bypass must leave samples un-filtered");
         }
+    }
+
+    #[test]
+    fn soft_saturation_bounds() {
+        assert_eq!(soft_saturate(0.5), 0.5);
+        let sat = soft_saturate(2.0);
+        assert!(sat < 1.0 && sat > 0.9);
+        let sat_neg = soft_saturate(-2.0);
+        assert!(sat_neg > -1.0 && sat_neg < -0.9);
     }
 
     #[test]

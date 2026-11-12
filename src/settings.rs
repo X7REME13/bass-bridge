@@ -15,6 +15,14 @@ pub struct Settings {
     pub phase_inverted: bool,
     #[serde(default)]
     pub bypass: bool,
+    #[serde(default = "default_true")]
+    pub soft_clip: bool,
+    #[serde(default = "default_true")]
+    pub direct_sum: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -23,12 +31,14 @@ impl Default for Settings {
             input_device: None,
             output_device: None,
             enabled: false,
-            cutoff_hz: 80.0,
-            gain_db: 0.0,
+            cutoff_hz: 90.0,
+            gain_db: 6.0,
             delay_ms: 0.0,
             stereo: false,
             phase_inverted: false,
             bypass: false,
+            soft_clip: true,
+            direct_sum: true,
         }
     }
 }
