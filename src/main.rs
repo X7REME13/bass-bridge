@@ -8,17 +8,17 @@ mod settings;
 use gui::BassBridgeApp;
 
 fn main() -> eframe::Result<()> {
-    let native_options = eframe::NativeOptions {
+    let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("BassBridge Pro - Subwoofer & Transducer Crossover")
-            .with_inner_size([560.0, 760.0])
-            .with_min_inner_size([480.0, 620.0]),
+            .with_inner_size([560.0, 620.0])
+            .with_min_inner_size([480.0, 520.0])
+            .with_title(format!("BassBridge v{}", env!("CARGO_PKG_VERSION"))),
         ..Default::default()
     };
 
     eframe::run_native(
         "BassBridge",
-        native_options,
+        options,
         Box::new(|cc| Ok(Box::new(BassBridgeApp::new(cc)))),
     )
 }

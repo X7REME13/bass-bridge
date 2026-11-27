@@ -15,8 +15,8 @@ pub struct Settings {
     pub phase_inverted: bool,
     #[serde(default)]
     pub bypass: bool,
-    #[serde(default = "default_true")]
-    pub soft_clip: bool,
+    #[serde(default = "default_true", alias = "soft_clip")]
+    pub limiter: bool,
     #[serde(default = "default_true")]
     pub direct_sum: bool,
 }
@@ -37,7 +37,7 @@ impl Default for Settings {
             stereo: false,
             phase_inverted: false,
             bypass: false,
-            soft_clip: true,
+            limiter: true,
             direct_sum: true,
         }
     }
@@ -68,7 +68,15 @@ impl Settings {
     pub fn save(&self) {
         let path = Self::config_path();
         if let Ok(data) = serde_json::to_string_pretty(self) {
-            let _ = fs::write(&path, data);
+            let tmp_path = path.with_extension("json.tmp");
+            if fs::write(&tmp_path, &data).is_ok() {
+                if fs::rename(&tmp_path, &path).is_err() {
+                    let _ = fs::remove_file(&tmp_path);
+                    let _ = fs::write(&path, data);
+                }
+            } else {
+                let _ = fs::write(&path, data);
+            }
         }
     }
 }

@@ -47,27 +47,21 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main'
         with:
-          tag_name: v0.2.0
-          name: "BassBridge Pro v0.2.0 (Studio Overhaul & Boost)"
+          tag_name: v0.3.0
+          name: "BassBridge v0.3.0"
           body: |
-            ## 🔊 BassBridge Pro v0.2.0 Windows Release
+            ## BassBridge v0.3.0 (Windows x64)
 
-            Major update addressing audio power and interface aesthetics!
+            ### Audio Engine & DSP Fixes
+            - Replaced choppy batch FIFO draining with an adaptive Catmull-Rom cubic resampler and feedback-free buffer priming to eliminate stuttering and high-frequency aliasing/clicks.
+            - Replaced the discontinuous `soft_saturate` waveshaper with an envelope-following peak limiter and C1-continuous soft ceiling so heavy bass does not generate high-frequency harmonics.
+            - Added an explicit feedback-loop guard preventing WASAPI loopback capture and playback on the same audio endpoint.
+            - Switched UI-to-audio DSP parameter updates to lock-free atomics and added smooth gain ramping plus non-reallocating delay line updates.
 
-            ### ✨ What's New in v0.2.0:
-            - **Massive Volume & Punch Boost:**
-              - Default gain increased to **+6.0 dB** (with range up to **+36 dB**).
-              - **Direct Summing Switch (+6 dB Voltage Boost):** Delivers double voltage directly into tactile transducers and subwoofers instead of standard 0.5x downmixing attenuation.
-              - **Analog Tape Soft-Saturator / Limiter:** Smooth $\tanh(x)$ soft saturation prevents harsh DAC digital clipping when driving subwoofers and transducers hard.
-            - **Cyber-Studio Dark UI Redesign:**
-              - Custom dark metallic obsidian theme (`#0B0E12`) with neon studio cyan, mint, and amber accents.
-              - **Interactive Frequency Response Bode Plot (20 Hz - 1000 Hz):** Live logarithmic frequency response curve visualizing the Linkwitz-Riley 4th-order (-24 dB/oct) slope with live crossover cutoff markers and energy glow.
-              - **Dual Real-time Oscilloscope:** Dual-trace waveform monitor with CRT dark grid.
-              - **Dual Hardware-Style LED Peak Meters:** Live dBFS level monitoring with clip warning.
-              - **Quick Crossover Presets:** Instant 40 Hz Sub, 80 Hz THX, 120 Hz Shakers, and 160 Hz Punch buttons.
-              - **Acoustic Distance Readout:** Shows physical wave travel distance equivalent in meters and feet for delay compensation.
-
-            Download `bass-bridge.exe` below, launch it, choose your devices, and start bass routing!
+            ### Interface & Live Monitor
+            - Implemented a real-time 4096-point Hann FFT audio spectrum monitor (`20 Hz - 1000 Hz`) with live input/bass overlays and draggable LR4 crossover cutoff handle.
+            - Upgraded the waveform scope to a zero-crossing triggered oscilloscope with synchronized input and filtered bass traces.
+            - Simplified the interface, removed cluttered labels and icons, and added the live version badge (`v0.3.0`), sample-rate status indicator, and device-routing warnings.
           files: target/release/bass-bridge.exe
           prerelease: false
           generate_release_notes: false
