@@ -1,4 +1,4 @@
-use crate::dsp::{AdaptiveResampler, SubwooferDsp, FFT_SIZE};
+use crate::dsp::{AdaptiveResampler, JitterController, SubwooferDsp, FFT_SIZE};
 use crate::settings::Settings;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, SizedSample, Stream, StreamConfig};
@@ -295,6 +295,7 @@ pub struct AudioEngine {
     pub tap: VisualizerTap,
     pub in_rate: Arc<AtomicU32>,
     pub out_rate: Arc<AtomicU32>,
+    pub buffer_ms_tenths: Arc<AtomicU32>,
     pub input_error: Arc<Mutex<Option<String>>>,
     pub output_error: Arc<Mutex<Option<String>>>,
 }
@@ -315,6 +316,7 @@ impl AudioEngine {
             tap: VisualizerTap::new(),
             in_rate: Arc::new(AtomicU32::new(0)),
             out_rate: Arc::new(AtomicU32::new(0)),
+            buffer_ms_tenths: Arc::new(AtomicU32::new(0)),
             input_error: Arc::new(Mutex::new(None)),
             output_error: Arc::new(Mutex::new(None)),
         }
@@ -349,6 +351,10 @@ impl AudioEngine {
             self.in_rate.load(Ordering::Relaxed),
             self.out_rate.load(Ordering::Relaxed),
         )
+    }
+
+    pub fn measured_buffer_ms(&self) -> f32 {
+        self.buffer_ms_tenths.load(Ordering::Relaxed) as f32 / 10.0
     }
 
     pub fn stream_error(&self) -> Option<String> {
@@ -437,8 +443,10 @@ impl AudioEngine {
         let out_channels = (out_config.channels() as usize).max(1);
         let in_format = in_config.sample_format();
         let out_format = out_config.sample_format();
-        let stream_config_in = in_config.config();
-        let stream_config_out = out_config.config();
+        let low_cfg_in = low_latency_stream_config(&in_config, 4);
+        let default_cfg_in = in_config.config();
+        let low_cfg_out = low_latency_stream_config(&out_config, 4);
+        let default_cfg_out = out_config.config();
 
         let (tx, rx): (Sender<[f32; 2]>, Receiver<[f32; 2]>) = bounded(16384);
 
@@ -449,33 +457,37 @@ impl AudioEngine {
         }
 
         let capture_stream = match in_format {
-            SampleFormat::F32 => build_capture_stream::<f32>(
+            SampleFormat::F32 => try_build_capture::<f32>(
                 &input_device,
-                &stream_config_in,
+                &low_cfg_in,
+                &default_cfg_in,
                 in_channels,
                 tx,
                 tap_in,
                 in_error,
             ),
-            SampleFormat::I16 => build_capture_stream::<i16>(
+            SampleFormat::I16 => try_build_capture::<i16>(
                 &input_device,
-                &stream_config_in,
+                &low_cfg_in,
+                &default_cfg_in,
                 in_channels,
                 tx,
                 tap_in,
                 in_error,
             ),
-            SampleFormat::I32 => build_capture_stream::<i32>(
+            SampleFormat::I32 => try_build_capture::<i32>(
                 &input_device,
-                &stream_config_in,
+                &low_cfg_in,
+                &default_cfg_in,
                 in_channels,
                 tx,
                 tap_in,
                 in_error,
             ),
-            SampleFormat::U16 => build_capture_stream::<u16>(
+            SampleFormat::U16 => try_build_capture::<u16>(
                 &input_device,
-                &stream_config_in,
+                &low_cfg_in,
+                &default_cfg_in,
                 in_channels,
                 tx,
                 tap_in,
@@ -507,10 +519,14 @@ impl AudioEngine {
         );
         params_shared.apply_to(&mut dsp);
 
+        self.buffer_ms_tenths.store(0, Ordering::Relaxed);
+        let buf_ms_tenths = self.buffer_ms_tenths.clone();
+
         let playback_stream = match out_format {
-            SampleFormat::F32 => build_playback_stream::<f32>(
+            SampleFormat::F32 => try_build_playback::<f32>(
                 &output_device,
-                &stream_config_out,
+                &low_cfg_out,
+                &default_cfg_out,
                 in_rate,
                 out_rate,
                 out_channels,
@@ -519,10 +535,12 @@ impl AudioEngine {
                 params_shared,
                 tap_bass,
                 out_error,
+                buf_ms_tenths,
             ),
-            SampleFormat::I16 => build_playback_stream::<i16>(
+            SampleFormat::I16 => try_build_playback::<i16>(
                 &output_device,
-                &stream_config_out,
+                &low_cfg_out,
+                &default_cfg_out,
                 in_rate,
                 out_rate,
                 out_channels,
@@ -531,10 +549,12 @@ impl AudioEngine {
                 params_shared,
                 tap_bass,
                 out_error,
+                buf_ms_tenths,
             ),
-            SampleFormat::I32 => build_playback_stream::<i32>(
+            SampleFormat::I32 => try_build_playback::<i32>(
                 &output_device,
-                &stream_config_out,
+                &low_cfg_out,
+                &default_cfg_out,
                 in_rate,
                 out_rate,
                 out_channels,
@@ -543,10 +563,12 @@ impl AudioEngine {
                 params_shared,
                 tap_bass,
                 out_error,
+                buf_ms_tenths,
             ),
-            SampleFormat::U16 => build_playback_stream::<u16>(
+            SampleFormat::U16 => try_build_playback::<u16>(
                 &output_device,
-                &stream_config_out,
+                &low_cfg_out,
+                &default_cfg_out,
                 in_rate,
                 out_rate,
                 out_channels,
@@ -555,6 +577,7 @@ impl AudioEngine {
                 params_shared,
                 tap_bass,
                 out_error,
+                buf_ms_tenths,
             ),
             other => {
                 return Err(format!("Unsupported output audio format: {other:?}"));
@@ -580,6 +603,7 @@ impl AudioEngine {
         self._playback_stream = None;
         self.in_rate.store(0, Ordering::Relaxed);
         self.out_rate.store(0, Ordering::Relaxed);
+        self.buffer_ms_tenths.store(0, Ordering::Relaxed);
         self.tap.clear();
         if let Ok(mut e) = self.input_error.lock() {
             *e = None;
@@ -592,6 +616,86 @@ impl AudioEngine {
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::SeqCst)
     }
+}
+
+fn low_latency_stream_config(supported: &cpal::SupportedStreamConfig, target_ms: u32) -> StreamConfig {
+    let mut cfg = supported.config();
+    let desired = ((supported.sample_rate().0 as u64 * target_ms as u64) / 1000).max(64)
+        as cpal::FrameCount;
+    match supported.buffer_size() {
+        cpal::SupportedBufferSize::Range { min, max } => {
+            cfg.buffer_size = cpal::BufferSize::Fixed(desired.clamp(*min, *max));
+        }
+        cpal::SupportedBufferSize::Unknown => {
+            cfg.buffer_size = cpal::BufferSize::Fixed(desired);
+        }
+    }
+    cfg
+}
+
+fn try_build_capture<S: PcmSample + 'static>(
+    device: &cpal::Device,
+    low_cfg: &StreamConfig,
+    default_cfg: &StreamConfig,
+    channels: usize,
+    tx: Sender<[f32; 2]>,
+    tap_in: VisualizerTap,
+    error_slot: Arc<Mutex<Option<String>>>,
+) -> Result<Stream, cpal::BuildStreamError> {
+    build_capture_stream::<S>(
+        device,
+        low_cfg,
+        channels,
+        tx.clone(),
+        tap_in.clone(),
+        error_slot.clone(),
+    )
+    .or_else(|_| build_capture_stream::<S>(device, default_cfg, channels, tx, tap_in, error_slot))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn try_build_playback<S: PcmSample + 'static>(
+    device: &cpal::Device,
+    low_cfg: &StreamConfig,
+    default_cfg: &StreamConfig,
+    in_rate: u32,
+    out_rate: u32,
+    out_channels: usize,
+    rx: Receiver<[f32; 2]>,
+    dsp: SubwooferDsp,
+    params: Arc<SharedDspParams>,
+    tap_bass: VisualizerTap,
+    error_slot: Arc<Mutex<Option<String>>>,
+    buffer_ms_tenths: Arc<AtomicU32>,
+) -> Result<Stream, cpal::BuildStreamError> {
+    build_playback_stream::<S>(
+        device,
+        low_cfg,
+        in_rate,
+        out_rate,
+        out_channels,
+        rx.clone(),
+        dsp.clone(),
+        params.clone(),
+        tap_bass.clone(),
+        error_slot.clone(),
+        buffer_ms_tenths.clone(),
+    )
+    .or_else(|_| {
+        build_playback_stream::<S>(
+            device,
+            default_cfg,
+            in_rate,
+            out_rate,
+            out_channels,
+            rx,
+            dsp,
+            params,
+            tap_bass,
+            error_slot,
+            buffer_ms_tenths,
+        )
+    })
 }
 
 fn build_capture_stream<S: PcmSample + 'static>(
@@ -640,64 +744,41 @@ fn build_playback_stream<S: PcmSample + 'static>(
     params: Arc<SharedDspParams>,
     tap_bass: VisualizerTap,
     error_slot: Arc<Mutex<Option<String>>>,
+    buffer_ms_tenths: Arc<AtomicU32>,
 ) -> Result<Stream, cpal::BuildStreamError> {
     let mut resampler = AdaptiveResampler::new(in_rate, out_rate);
-    let base_ratio = resampler.base_ratio();
+    let mut jitter = JitterController::new(in_rate, out_rate);
     let mut fifo: VecDeque<[f32; 2]> = VecDeque::with_capacity(16384);
     let mut viz_buf: Vec<f32> = Vec::with_capacity(2048);
-    let mut primed = false;
-    let mut ramp = 0.0f32;
-    let mut err_smooth = 0.0f64;
 
     device.build_output_stream(
         config,
         move |data: &mut [S], _: &cpal::OutputCallbackInfo| {
             params.apply_to(&mut dsp);
 
+            let mut received = 0usize;
             while let Ok(frame) = rx.try_recv() {
                 fifo.push_back(frame);
+                received += 1;
             }
 
             let needed_frames = (data.len() / out_channels).max(1);
-            let min_target = ((in_rate as usize * 20) / 1000).max(256);
-            let target_frames = ((needed_frames as f64 * base_ratio).ceil() as usize * 2)
-                .max(min_target);
-
-            // Overrun guard: prevent unbound latency buildup if clocks drift apart
-            let max_fifo = target_frames * 4;
-            if fifo.len() > max_fifo {
-                let drop_count = fifo.len() - target_frames;
-                fifo.drain(..drop_count);
-            }
-
-            if !primed && fifo.len() >= target_frames {
-                primed = true;
-                ramp = 0.0;
-                err_smooth = 0.0;
-            }
-
-            let step_ratio = if primed {
-                let fill_err =
-                    (fifo.len() as f64 - target_frames as f64) / (target_frames as f64).max(1.0);
-                err_smooth += 0.02 * (fill_err - err_smooth);
-                base_ratio * (1.0 + (err_smooth * 0.0025).clamp(-0.004, 0.004))
-            } else {
-                base_ratio
-            };
+            let step_ratio = jitter.begin_callback(&mut fifo, received, needed_frames);
 
             viz_buf.clear();
             let zero = S::from_unit_f32(0.0);
+            let mut underran = false;
 
             for frame in data.chunks_exact_mut(out_channels) {
-                let raw = if primed {
+                let raw = if jitter.is_primed() {
                     match resampler.next_frame(&mut fifo, step_ratio) {
                         Some(f) => {
-                            ramp = (ramp + (1.0 / 64.0)).min(1.0);
-                            [f[0] * ramp, f[1] * ramp]
+                            let gain = jitter.next_fade_gain();
+                            [f[0] * gain, f[1] * gain]
                         }
                         None => {
-                            primed = false;
-                            ramp = 0.0;
+                            underran = true;
+                            jitter.on_underrun();
                             resampler.reset();
                             [0.0, 0.0]
                         }
@@ -715,6 +796,15 @@ fn build_playback_stream<S: PcmSample + 'static>(
                 viz_buf.push((out[0] + out[1]) * 0.5);
             }
 
+            jitter.end_callback(&mut fifo, needed_frames, underran);
+            let ms_tenths = if jitter.is_primed() {
+                (jitter.estimated_buffer_ms(fifo.len(), needed_frames) * 10.0)
+                    .round()
+                    .clamp(0.0, 9999.0) as u32
+            } else {
+                0
+            };
+            buffer_ms_tenths.store(ms_tenths, Ordering::Relaxed);
             tap_bass.push_bass(&viz_buf);
         },
         move |err| {

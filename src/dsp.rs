@@ -492,6 +492,179 @@ fn catmull_rom(p0: f32, p1: f32, p2: f32, p3: f32, t: f32) -> f32 {
         + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
 }
 
+/// Adaptive trough-tracking jitter buffer controller that keeps capture-to-subwoofer
+/// queue latency minimal (3 ms default trough) while absorbing mismatched WASAPI periods.
+pub struct JitterController {
+    in_rate: u32,
+    out_rate: u32,
+    base_ratio: f64,
+    pub cushion_ms: f64,
+    primed: bool,
+    ramp: f32,
+    err_smooth: f64,
+    step_ratio: f64,
+    pub silent_callbacks: u32,
+    post_window: [usize; 8],
+    post_window_idx: usize,
+    post_window_count: usize,
+    steady_cb_out: usize,
+    packet_frames: usize,
+    last_gap_frames: usize,
+}
+
+impl JitterController {
+    pub fn new(in_rate: u32, out_rate: u32) -> Self {
+        let in_r = in_rate.max(1);
+        let out_r = out_rate.max(1);
+        let base_ratio = in_r as f64 / out_r as f64;
+        Self {
+            in_rate: in_r,
+            out_rate: out_r,
+            base_ratio,
+            cushion_ms: 3.0,
+            primed: false,
+            ramp: 0.0,
+            err_smooth: 0.0,
+            step_ratio: base_ratio,
+            silent_callbacks: 0,
+            post_window: [0; 8],
+            post_window_idx: 0,
+            post_window_count: 0,
+            steady_cb_out: 0,
+            packet_frames: 0,
+            last_gap_frames: 0,
+        }
+    }
+
+    pub fn cushion_frames(&self) -> usize {
+        ((self.in_rate as f64 * self.cushion_ms) / 1000.0)
+            .round()
+            .max(64.0) as usize
+    }
+
+    pub fn begin_callback(
+        &mut self,
+        fifo: &mut VecDeque<[f32; 2]>,
+        received_frames: usize,
+        needed_out_frames: usize,
+    ) -> f64 {
+        if received_frames > 0 {
+            self.silent_callbacks = 0;
+        } else {
+            self.silent_callbacks = self.silent_callbacks.saturating_add(1);
+        }
+
+        let max_single_packet = (self.in_rate as usize * 12) / 1000;
+        if received_frames > 0 && received_frames <= max_single_packet {
+            self.packet_frames = self.packet_frames.max(received_frames);
+        }
+
+        let min_cb = ((self.out_rate as usize * 2) / 1000).max(64);
+        let bounded_out = needed_out_frames.max(min_cb);
+        if self.steady_cb_out == 0 {
+            self.steady_cb_out = bounded_out;
+        } else {
+            self.steady_cb_out = self.steady_cb_out.min(bounded_out);
+        }
+
+        let fractional_margin = usize::from((self.base_ratio - 1.0).abs() > 1e-4);
+        let needed_in = (needed_out_frames as f64 * self.base_ratio).ceil() as usize + fractional_margin;
+        let gap_frames = self.packet_frames.saturating_sub(needed_in);
+        self.last_gap_frames = gap_frames;
+        let prime_target = needed_in + self.cushion_frames() + gap_frames;
+
+        if !self.primed && fifo.len() >= prime_target {
+            if fifo.len() > prime_target {
+                let trim = fifo.len() - prime_target;
+                fifo.drain(..trim);
+            }
+            self.primed = true;
+            self.ramp = 0.0;
+            self.err_smooth = 0.0;
+            self.step_ratio = self.base_ratio;
+            self.post_window_count = 0;
+            self.post_window_idx = 0;
+        }
+
+        self.step_ratio
+    }
+
+    pub fn is_primed(&self) -> bool {
+        self.primed
+    }
+
+    #[inline]
+    pub fn next_fade_gain(&mut self) -> f32 {
+        self.ramp = (self.ramp + (1.0 / 48.0)).min(1.0);
+        self.ramp
+    }
+
+    pub fn on_underrun(&mut self) {
+        self.primed = false;
+        self.ramp = 0.0;
+        self.err_smooth = 0.0;
+        self.step_ratio = self.base_ratio;
+        self.post_window_count = 0;
+    }
+
+    pub fn end_callback(
+        &mut self,
+        fifo: &mut VecDeque<[f32; 2]>,
+        needed_out_frames: usize,
+        underran: bool,
+    ) {
+        if underran {
+            if self.silent_callbacks <= 4 {
+                self.cushion_ms = (self.cushion_ms + 2.0).min(14.0);
+            }
+            return;
+        }
+        if !self.primed {
+            return;
+        }
+
+        let cushion = self.cushion_frames();
+        let needed_in = (needed_out_frames as f64 * self.base_ratio).ceil() as usize;
+        let target_trough = cushion;
+        let keep_post = cushion + self.last_gap_frames;
+        let max_post = keep_post + ((self.in_rate as usize * 25) / 1000).max(needed_in);
+
+        if fifo.len() > max_post {
+            fifo.drain(..fifo.len() - keep_post);
+            self.err_smooth = 0.0;
+            self.step_ratio = self.base_ratio;
+            self.post_window_count = 0;
+            return;
+        }
+
+        self.post_window[self.post_window_idx] = fifo.len();
+        self.post_window_idx = (self.post_window_idx + 1) % self.post_window.len();
+        self.post_window_count = (self.post_window_count + 1).min(self.post_window.len());
+
+        let min_post = self.post_window[..self.post_window_count]
+            .iter()
+            .copied()
+            .min()
+            .unwrap_or(target_trough);
+
+        let fill_err = (min_post as f64 - target_trough as f64) / (target_trough as f64).max(128.0);
+        self.err_smooth += 0.05 * (fill_err - self.err_smooth);
+        let trim = (self.err_smooth * 0.004).clamp(-0.008, 0.008);
+        self.step_ratio = self.base_ratio * (1.0 + trim);
+    }
+
+    pub fn estimated_buffer_ms(&self, post_fill: usize, needed_out_frames: usize) -> f32 {
+        let cb_out = if self.steady_cb_out > 0 {
+            self.steady_cb_out
+        } else {
+            needed_out_frames
+        };
+        let fifo_ms = post_fill as f32 * 1000.0 / self.in_rate as f32;
+        let out_ms = cb_out as f32 * 1000.0 / self.out_rate as f32;
+        fifo_ms + out_ms
+    }
+}
+
 /// Computes a Hann-windowed radix-2 Cooley-Tukey FFT magnitude spectrum in dBFS.
 /// Returns `FFT_SIZE / 2` bins.
 pub fn compute_spectrum_db(samples: &[f32], out_bins: &mut Vec<f32>) {
@@ -802,5 +975,97 @@ mod tests {
             "Expected 500 Hz noise floor < -40 dB, got {} dB",
             bins[bin_500]
         );
+    }
+
+    #[test]
+    fn jitter_controller_trims_startup_backlog() {
+        let mut jc = JitterController::new(48000, 48000);
+        let mut fifo = VecDeque::new();
+        for i in 0..2400 {
+            fifo.push_back([i as f32 * 0.001, i as f32 * 0.001]);
+        }
+
+        let ratio = jc.begin_callback(&mut fifo, 2400, 480);
+        assert!((ratio - 1.0).abs() < 1e-9);
+        assert!(jc.is_primed());
+        // Must trim 50 ms backlog down to needed_in (480) + cushion (144 = 3 ms)
+        assert_eq!(fifo.len(), 624);
+        // Kept newest tail rather than stale startup audio
+        assert!((fifo.front().unwrap()[0] - (2400 - 624) as f32 * 0.001).abs() < 1e-6);
+    }
+
+    #[test]
+    fn jitter_controller_mismatched_periods_stays_glitch_free() {
+        let mut jc = JitterController::new(48000, 48000);
+        let mut resampler = AdaptiveResampler::new(48000, 48000);
+        let mut fifo = VecDeque::new();
+        let mut underruns_after_prime = 0usize;
+        let mut was_primed = false;
+        let mut min_post_after_settle = usize::MAX;
+
+        for cb in 0..200 {
+            let received = if cb % 2 == 0 {
+                for s in 0..480 {
+                    let v = (cb * 480 + s) as f32 * 0.0001;
+                    fifo.push_back([v, v]);
+                }
+                480
+            } else {
+                0
+            };
+
+            let step = jc.begin_callback(&mut fifo, received, 240);
+            let mut underran = false;
+
+            if jc.is_primed() {
+                was_primed = true;
+                for _ in 0..240 {
+                    if resampler.next_frame(&mut fifo, step).is_some() {
+                        let _ = jc.next_fade_gain();
+                    } else {
+                        underran = true;
+                        jc.on_underrun();
+                        resampler.reset();
+                        break;
+                    }
+                }
+            }
+
+            if was_primed && underran {
+                underruns_after_prime += 1;
+            }
+            jc.end_callback(&mut fifo, 240, underran);
+
+            if cb >= 10 && jc.is_primed() {
+                min_post_after_settle = min_post_after_settle.min(fifo.len());
+            }
+        }
+
+        assert!(was_primed);
+        assert_eq!(underruns_after_prime, 0, "Expected zero underruns after priming");
+        // Trough should stay near 3 ms (144 frames <= 288 = 6 ms)
+        assert!(
+            min_post_after_settle <= 288 && min_post_after_settle >= 64,
+            "Unexpected steady trough: {min_post_after_settle} frames"
+        );
+    }
+
+    #[test]
+    fn jitter_controller_expands_only_on_active_underrun() {
+        let mut jc = JitterController::new(48000, 48000);
+        let mut fifo = VecDeque::new();
+
+        // Underrun right after receiving capture audio (real mid-playback jitter)
+        jc.begin_callback(&mut fifo, 480, 480);
+        fifo.clear();
+        jc.end_callback(&mut fifo, 480, true);
+        assert!((jc.cushion_ms - 5.0).abs() < 1e-9);
+
+        // Underrun after 5 silent callbacks (WASAPI idle pause) must NOT inflate cushion
+        for _ in 0..5 {
+            jc.begin_callback(&mut fifo, 0, 480);
+        }
+        jc.end_callback(&mut fifo, 480, true);
+        assert!((jc.cushion_ms - 5.0).abs() < 1e-9);
     }
 }

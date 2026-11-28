@@ -276,7 +276,8 @@ impl eframe::App for BassBridgeApp {
 
                             let status_text = if running {
                                 let (ir, or) = self.audio.active_rates();
-                                if ir > 0 && or > 0 {
+                                let buf_ms = self.audio.measured_buffer_ms();
+                                let base = if ir > 0 && or > 0 {
                                     if ir == or {
                                         format!("Running · {} kHz", format_khz(or))
                                     } else {
@@ -288,6 +289,11 @@ impl eframe::App for BassBridgeApp {
                                     }
                                 } else {
                                     "Running".to_string()
+                                };
+                                if buf_ms > 0.0 {
+                                    format!("{base} · {buf_ms:.0} ms")
+                                } else {
+                                    base
                                 }
                             } else {
                                 "Stopped".to_string()

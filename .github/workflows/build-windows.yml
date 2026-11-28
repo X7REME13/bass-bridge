@@ -47,21 +47,16 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main'
         with:
-          tag_name: v0.3.0
-          name: "BassBridge v0.3.0"
+          tag_name: v0.3.1
+          name: "BassBridge v0.3.1"
           body: |
-            ## BassBridge v0.3.0 (Windows x64)
+            ## BassBridge v0.3.1 (Windows x64)
 
-            ### Audio Engine & DSP Fixes
-            - Replaced choppy batch FIFO draining with an adaptive Catmull-Rom cubic resampler and feedback-free buffer priming to eliminate stuttering and high-frequency aliasing/clicks.
-            - Replaced the discontinuous `soft_saturate` waveshaper with an envelope-following peak limiter and C1-continuous soft ceiling so heavy bass does not generate high-frequency harmonics.
-            - Added an explicit feedback-loop guard preventing WASAPI loopback capture and playback on the same audio endpoint.
-            - Switched UI-to-audio DSP parameter updates to lock-free atomics and added smooth gain ramping plus non-reallocating delay line updates.
-
-            ### Interface & Live Monitor
-            - Implemented a real-time 4096-point Hann FFT audio spectrum monitor (`20 Hz - 1000 Hz`) with live input/bass overlays and draggable LR4 crossover cutoff handle.
-            - Upgraded the waveform scope to a zero-crossing triggered oscilloscope with synchronized input and filtered bass traces.
-            - Simplified the interface, removed cluttered labels and icons, and added the live version badge (`v0.3.0`), sample-rate status indicator, and device-routing warnings.
+            ### Low-Latency Audio Pipeline Fixes
+            - Added low-latency WASAPI stream buffer negotiation (4 ms target with automatic fallback to device default).
+            - Replaced the 20–44 ms pre-consume FIFO target with a 3 ms post-fill trough-tracking `JitterController` that trims stale startup backlog immediately upon priming.
+            - Tightened rate-drift tracking and overrun capping to keep capture-to-subwoofer buffering latency minimal without underruns.
+            - Added a live end-to-end buffer latency readout (`ms`) to the header status bar.
           files: target/release/bass-bridge.exe
           prerelease: false
           generate_release_notes: false
